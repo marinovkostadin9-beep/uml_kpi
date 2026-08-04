@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KPI UML</title>
+<title>Контролна кула · KPI на пратките</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
@@ -49,7 +49,7 @@
   header.top h1{font-size:clamp(22px,3vw,30px);font-weight:700;}
   header.top p{color:var(--muted);margin-top:6px;font-size:14px;max-width:520px;}
 
-  .loader{f
+  .loader{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
   }
   .file-btn{
@@ -121,6 +121,12 @@
   }
   .panel h3{font-size:15px;font-weight:600;margin-bottom:4px;}
   .panel .panel-sub{color:var(--muted);font-size:12px;margin-bottom:16px;}
+
+  .period-select, .period-date{
+    background:var(--surface-2);border:1px solid var(--line);color:var(--text);
+    padding:7px 10px;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;
+  }
+  .period-select:focus, .period-date:focus{outline:1px solid var(--teal);}
   .chart-wrap{position:relative;height:260px;}
 
   table{width:100%;border-collapse:collapse;font-size:13px;}
@@ -150,19 +156,16 @@
 
 <header class="top">
   <div>
-    <div class="brand-eyebrow">UML KPI HISTORY</div>
-    <h1>Unimasters — обобщен изглед</h1>
-  </div>
-  <div class="loader">
-    <label for="fileInput" class="file-btn">Избери kpi_history.csv</label>
-    <input type="file" id="fileInput" accept=".csv">
-    <span class="file-name" id="fileName">няма избран файл</span>
+    <div class="brand-eyebrow">Логистика / Контролна кула</div>
+    <h1>KPI на пратките — обобщен изглед</h1>
+    <p>Данните се зареждат автоматично от <span class="mono">kpi_history.csv</span> в същата папка.</p>
   </div>
 </header>
 
 <div id="empty-state">
   <div class="icon">🚚</div>
-  <h2>Няма заредени данни</h2>
+  <h2 id="emptyTitle">Зареждане...</h2>
+  <p id="emptyText">Данните се зареждат автоматично.</p>
 </div>
 
 <div id="dashboard">
@@ -197,13 +200,30 @@
 
   <div class="grid-2">
     <div class="panel">
-      <h3>Тренд: % пратки на време</h3>
-      <div class="panel-sub">По дни, от целия зареден период</div>
-      <div class="chart-wrap"><canvas id="onTimeChart"></canvas></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+        <div>
+          <h3>Тренд: % пратки на време</h3>
+          <div class="panel-sub" style="margin-bottom:0;">Избери период</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="periodSelect" class="period-select">
+            <option value="day">Последен ден</option>
+            <option value="week" selected>Последна седмица</option>
+            <option value="month">Последен месец</option>
+            <option value="custom">Персонализиран период</option>
+          </select>
+          <span id="customRange" style="display:none;gap:6px;align-items:center;">
+            <input type="date" id="customFrom" class="period-date">
+            <span style="color:var(--muted);font-size:12px;">до</span>
+            <input type="date" id="customTo" class="period-date">
+          </span>
+        </div>
+      </div>
+      <div class="chart-wrap" style="margin-top:14px;"><canvas id="onTimeChart"></canvas></div>
     </div>
     <div class="panel">
-      <h3>Закъснения по тип</h3>
-      <div class="panel-sub">Вдигане vs. доставка, по дни</div>
+      <h3>Закъснения по посока</h3>
+      <div class="panel-sub">Внос vs. износ, по дни</div>
       <div class="chart-wrap"><canvas id="delaysChart"></canvas></div>
     </div>
   </div>
@@ -221,7 +241,7 @@
 
 </div>
 
-<footer>Unimasters KPI Tracker</footer>
+<footer>erp_kpi_tracker · локален изглед, без сървър, без качване на данни</footer>
 
 <script>
 function parseCSV(text){
@@ -242,24 +262,78 @@ function parseBgDate(s){
 }
 
 let onTimeChart, delaysChart;
+let allRows = [];
 
-function render(rows){
-  rows = rows.map(r => ({
+function filterByPeriod(rows, period, fromStr, toStr){
+  if(!rows.length) return rows;
+  const latest = rows[rows.length-1].dateObj;
+
+  if(period === 'day'){
+    return rows.filter(r => r.dateObj.getTime() === latest.getTime());
+  }
+  if(period === 'week'){
+    const start = new Date(latest); start.setDate(start.getDate() - 6);
+    return rows.filter(r => r.dateObj >= start && r.dateObj <= latest);
+  }
+  if(period === 'month'){
+    const start = new Date(latest); start.setDate(start.getDate() - 29);
+    return rows.filter(r => r.dateObj >= start && r.dateObj <= latest);
+  }
+  if(period === 'custom'){
+    if(!fromStr || !toStr) return rows;
+    const from = new Date(fromStr + 'T00:00:00');
+    const to = new Date(toStr + 'T23:59:59');
+    return rows.filter(r => r.dateObj >= from && r.dateObj <= to);
+  }
+  return rows;
+}
+
+function updateOnTimeChart(){
+  const period = document.getElementById('periodSelect').value;
+  const fromStr = document.getElementById('customFrom').value;
+  const toStr = document.getElementById('customTo').value;
+  const filtered = filterByPeriod(allRows, period, fromStr, toStr);
+
+  const labels = filtered.map(r=>r.date);
+  if(onTimeChart) onTimeChart.destroy();
+  const ctx1 = document.getElementById('onTimeChart').getContext('2d');
+  onTimeChart = new Chart(ctx1, {
+    type:'line',
+    data:{ labels, datasets:[{
+      label:'На време %', data: filtered.map(r=>r.onTime),
+      borderColor:'#0D9488', backgroundColor:'rgba(13,148,136,.10)',
+      fill:true, tension:.3, pointRadius:3, pointBackgroundColor:'#0D9488'
+    }]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        y:{min:0,max:100,ticks:{color:'#64748B'},grid:{color:'#E2E8F0'}},
+        x:{ticks:{color:'#64748B',maxRotation:0},grid:{display:false}}
+      }
+    }
+  });
+}
+
+function render(rawRows){
+  allRows = rawRows.map(r => ({
     date: r['Дата'],
     dateObj: parseBgDate(r['Дата']),
     active: Number(r['Активни_пратки']),
-    pickup: Number(r['Закъснели_вдигане']),
-    delivery: Number(r['Закъснели_доставка']),
+    pickup: Number(r['Закъснели_вдигане'] || 0),
+    delivery: Number(r['Закъснели_доставка'] || 0),
+    exportDelayed: Number(r['Закъснели_износ'] || 0),
+    importDelayed: Number(r['Закъснели_внос'] || 0),
     onTime: Number(r['На_време_%'])
   })).sort((a,b)=>a.dateObj - b.dateObj);
 
-  if(!rows.length) return;
+  if(!allRows.length) return;
 
   document.getElementById('empty-state').style.display='none';
   document.getElementById('dashboard').style.display='block';
 
-  const latest = rows[rows.length-1];
-  const prev = rows.length>1 ? rows[rows.length-2] : null;
+  const latest = allRows[allRows.length-1];
+  const prev = allRows.length>1 ? allRows[allRows.length-2] : null;
 
   document.getElementById('kpiOnTime').textContent = latest.onTime.toFixed(1)+'%';
   document.getElementById('kpiOnTimeDate').textContent = latest.date;
@@ -283,35 +357,16 @@ function render(rows){
     routeMarker.style.left = latest.onTime+'%';
   });
 
-  const labels = rows.map(r=>r.date);
+  updateOnTimeChart();
 
-  if(onTimeChart) onTimeChart.destroy();
+  const labels = allRows.map(r=>r.date);
   if(delaysChart) delaysChart.destroy();
-
-  const ctx1 = document.getElementById('onTimeChart').getContext('2d');
-  onTimeChart = new Chart(ctx1, {
-    type:'line',
-    data:{ labels, datasets:[{
-      label:'На време %', data: rows.map(r=>r.onTime),
-      borderColor:'#0D9488', backgroundColor:'rgba(13,148,136,.10)',
-      fill:true, tension:.3, pointRadius:3, pointBackgroundColor:'#0D9488'
-    }]},
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{display:false}},
-      scales:{
-        y:{min:0,max:100,ticks:{color:'#64748B'},grid:{color:'#E2E8F0'}},
-        x:{ticks:{color:'#64748B',maxRotation:0},grid:{display:false}}
-      }
-    }
-  });
-
   const ctx2 = document.getElementById('delaysChart').getContext('2d');
   delaysChart = new Chart(ctx2, {
     type:'bar',
     data:{ labels, datasets:[
-      {label:'Вдигане', data: rows.map(r=>r.pickup), backgroundColor:'#B45309', borderRadius:4},
-      {label:'Доставка', data: rows.map(r=>r.delivery), backgroundColor:'#DC2626', borderRadius:4}
+      {label:'Износ (BG-DE)', data: allRows.map(r=>r.exportDelayed), backgroundColor:'#B45309', borderRadius:4},
+      {label:'Внос (DE-BG)', data: allRows.map(r=>r.importDelayed), backgroundColor:'#DC2626', borderRadius:4}
     ]},
     options:{
       responsive:true, maintainAspectRatio:false,
@@ -324,41 +379,44 @@ function render(rows){
   });
 
   const body = document.getElementById('historyBody');
-  body.innerHTML = rows.slice().reverse().map(r=>{
-    let pillClass = 'ok', pillText='на време';
-    if(r.onTime < 100 && r.onTime >= 85){ pillClass='warn'; pillText='леко изоставане'; }
-    else if(r.onTime < 85){ pillClass='bad'; pillText='критично'; }
+  body.innerHTML = allRows.slice().reverse().map(r=>{
     return `<tr>
       <td>${r.date}</td>
       <td>${r.active}</td>
       <td>${r.pickup}</td>
       <td>${r.delivery}</td>
-      <td>${r.onTime.toFixed(1)}% <span class="pill ${pillClass}">${pillText}</span></td>
+      <td>${r.onTime.toFixed(1)}%</td>
     </tr>`;
   }).join('');
 }
 
-async function loadCSV() {
-    try {
-        const response = await fetch("kpi_history.csv");
+document.getElementById('periodSelect').addEventListener('change', function(){
+  document.getElementById('customRange').style.display = this.value === 'custom' ? 'inline-flex' : 'none';
+  updateOnTimeChart();
+});
+document.getElementById('customFrom').addEventListener('change', updateOnTimeChart);
+document.getElementById('customTo').addEventListener('change', updateOnTimeChart);
 
-        if (!response.ok) {
-            throw new Error("Не може да се зареди kpi_history.csv");
-        }
 
-        const text = await response.text();
-
-        document.getElementById("fileName").textContent = "kpi_history.csv";
-
-        const rows = parseCSV(text);
-        render(rows);
-
-    } catch (err) {
-        alert(err.message);
-    }
-}
-
-loadCSV();
+window.addEventListener('DOMContentLoaded', function(){
+  fetch('kpi_history.csv', {cache:'no-store'})
+    .then(function(res){
+      if(!res.ok) throw new Error('Файлът не е намерен (HTTP ' + res.status + ')');
+      return res.text();
+    })
+    .then(function(text){
+      const rows = parseCSV(text);
+      render(rows);
+    })
+    .catch(function(err){
+      document.getElementById('emptyTitle').textContent = 'Няма заредени данни';
+      document.getElementById('emptyText').innerHTML =
+        'Не успях да заредя <span class="mono">kpi_history.csv</span> от тази папка (' + err.message + ').<br><br>' +
+        'Провери дали файлът <span class="mono">kpi_history.csv</span> е в същата папка като тази HTML страница.<br>' +
+        'Ако страницата е отворена директно с двоен клик (file://), браузърът може да блокира четенето на локални файлове — ' +
+        'в такъв случай отвори я през локален сървър или през хоствания линк.';
+    });
+});
 </script>
 
 </body>
